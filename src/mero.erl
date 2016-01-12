@@ -204,6 +204,7 @@ state(ClusterName) ->
      {links, Links},
      {monitors, Monitors},
      {free, Free},
+     {in_use, Connected - Free},
      {connected, Connected},
      {connecting, Connecting},
      {failed, Failed},
