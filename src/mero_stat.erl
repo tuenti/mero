@@ -1,20 +1,22 @@
 -module(mero_stat).
 
+-author('Miriam Pena <miriam.pena@adroll.com>').
+
 -export([
-         noop/1, incr/1
-        ]).
+    noop/3,
+    verbose_noop/3
+]).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-incr(Key) ->
-    {StatMod, StatFun} = mero_conf:stat_callback(),
-    erlang:apply(StatMod, StatFun, [Key, 1]).
-
-noop(_Key) ->
+-spec noop(Type :: gauge | spiral | histogram, KeyTags :: iolist(), Value :: integer()) ->
+    no_return().
+noop(_Type, _KeyAndTags, _Value) ->
     ok.
 
-%%%===================================================================
-%%% Internal Functions
-%%%===================================================================
+-spec verbose_noop(Type :: gauge | spiral | histogram, KeyTags :: iolist(), Value :: integer()) ->
+    no_return().
+verbose_noop(Type, KeyAndTags, Value) ->
+    error_logger:info_report({stat, Type, KeyAndTags, Value}).

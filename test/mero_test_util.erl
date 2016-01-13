@@ -34,74 +34,75 @@
          stop_servers/1,
          wait_for_pool_state/5,
          wait_for_min_connections_failed/4
-  ]).
+        ]).
 
 
 wait_for_pool_state(Pool, Free, Connected, Connecting, NumFailedConnecting) ->
-  case mero_pool:state(Pool) of
-    [ _QueueInfo,
-      _Links,
-      _Monitors,
-      {free, Free},
-      {num_connected, Connected},
-      {num_connecting, Connecting},
-      {num_failed_connecting, NumFailedConnecting}] = State ->
-      io:format("Pool State is ~p ~p... GOT IT! ~n",[now(), State]),
-      ok;
-    State ->
-      io:format("Pool State is ~p ~p... retry ~n",[now(), State]),
-      timer:sleep(30),
-      wait_for_pool_state(Pool, Free, Connected, Connecting, NumFailedConnecting)
-  end.
+    wait_for_state(Pool, [{free, Free},
+                          {num_connected, Connected},
+                          {num_connecting, Connecting},
+                          {num_failed_connecting, NumFailedConnecting}]).
 
 
 wait_for_min_connections_failed(Pool, Free, Connected, MinFailed) ->
-  case mero_pool:state(Pool) of
-    [ _QueueInfo,
-      _Links,
-      _Monitors,
-      {free, Free},
-      {num_connected, Connected},
-      {num_connecting, _},
-      {num_failed_connecting, NumFailed}] = State when MinFailed =<NumFailed ->
-      io:format("Pool State is ~p ~p... GOT IT! ~n",[now(), State]),
-      ok;
-    State ->
-      io:format("Pool State is ~p ~p... retry ~n",[now(), State]),
-      timer:sleep(30),
-      wait_for_min_connections_failed(Pool, Free, Connected, MinFailed)
-  end.
+    State = mero_pool:state(Pool),
+    NumFailed = proplists:get_value(num_failed_connecting, State),
+    NumFree = proplists:get_value(free, State),
+    NumConnected = proplists:get_value(num_connected, State),
+    case {NumFree, NumConnected, NumFailed} of
+        {Free, Connected, NumFailed} when NumFailed >= MinFailed ->
+            ok;
+        _ ->
+            io:format("Pool State is ~p ~p > ~p? ~p ... retry ~n",[os:timestamp(),
+                                                                   NumFailed,
+                                                                   MinFailed,
+                                                                   State]),
+            timer:sleep(30),
+            wait_for_min_connections_failed(Pool, Free, Connected, MinFailed)
+    end.
 
+
+wait_for_state(Pool, Expected) ->
+    State = mero_pool:state(Pool),
+    Failed = Expected -- State,
+    case Failed of
+        [] ->
+            State;
+        Failed ->
+            io:format("Pool State at ~p is expected ~p but got ~p... retry ~n", [os:timestamp(), Failed, State]),
+            timer:sleep(30),
+            wait_for_state(Pool, Expected)
+    end.
 
 start_server(ClusterConfig, MinConn, MaxConn, Expiration, MaxTime) ->
-  ok = mero_conf:cluster_config(ClusterConfig),
-  ok = mero_conf:initial_connections_per_pool(MinConn),
-  ok = mero_conf:min_free_connections_per_pool(MinConn),
-  ok = mero_conf:max_connections_per_pool(MaxConn),
-  ok = mero_conf:expiration_interval(Expiration),
-  ok = mero_conf:connection_unused_max_time(MaxTime),
-  ok = mero_conf:max_connection_delay_time(100),
-  ok = mero_conf:write_retries(3),
-  ok = mero_conf:timeout_read(100),
-  ok = mero_conf:timeout_write(1000),
+    ok = mero_conf:cluster_config(ClusterConfig),
+    ok = mero_conf:initial_connections_per_pool(MinConn),
+    ok = mero_conf:min_free_connections_per_pool(MinConn),
+    ok = mero_conf:max_connections_per_pool(MaxConn),
+    ok = mero_conf:expiration_interval(Expiration),
+    ok = mero_conf:connection_unused_max_time(MaxTime),
+    ok = mero_conf:max_connection_delay_time(100),
+    ok = mero_conf:write_retries(3),
+    ok = mero_conf:timeout_read(100),
+    ok = mero_conf:timeout_write(1000),
 
-  ServerPids = lists:foldr(
-      fun({_, Config}, Acc) ->
-        HostPortList = proplists:get_value(servers, Config),
-        lists:foldr(fun({_Host, Port}, Acc2) ->
-            ct:log("Starting server on Port ~p", [Port]),
-            {ok, ServerPid} = mero_dummy_server:start_link(Port),
-            [ServerPid | Acc2]
-            end, Acc, HostPortList)
-      end, [], ClusterConfig),
+    ServerPids = lists:foldr(
+                   fun({_, Config}, Acc) ->
+                           HostPortList = proplists:get_value(servers, Config),
+                           lists:foldr(fun({_Host, Port}, Acc2) ->
+                                               ct:log("Starting server on Port ~p", [Port]),
+                                               {ok, ServerPid} = mero_dummy_server:start_link(Port),
+                                               [ServerPid | Acc2]
+                                       end, Acc, HostPortList)
+                   end, [], ClusterConfig),
 
-  ok = application:start(mero),
+    ok = application:start(mero),
 
-  %% Wait for the connections
-  [ wait_for_pool_state(PoolName, MinConn, MinConn, 0, 0)
-    || {_Name, _Host, _Port, PoolName, _WorkerModule} <- mero_cluster:child_definitions() ],
+    %% Wait for the connections
+    [wait_for_pool_state(PoolName, MinConn, MinConn, 0, 0)
+     || {_Name, _Host, _Port, PoolName, _WorkerModule} <- mero_cluster:child_definitions()],
 
-  {ok, ServerPids}.
+    {ok, ServerPids}.
 
 stop_servers(Pids) ->
     [mero_dummy_server:stop(Pid) || Pid <- Pids].

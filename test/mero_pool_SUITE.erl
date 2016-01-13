@@ -94,6 +94,7 @@ start_stop(_Conf) ->
          {links,6},
          {monitors,0},
          {free,5},
+         {in_use,0},
          {connected,5},
          {connecting,0},
          {failed,0},

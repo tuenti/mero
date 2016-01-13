@@ -56,10 +56,10 @@
 connect(Host, Port, CallbackInfo) ->
     case gen_tcp:connect(Host, Port, ?SOCKET_OPTIONS) of
         {ok, Socket} ->
-            ?LOG_EVENT(CallbackInfo, [socket, connect, ok]),
+            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, ok]),
             {ok, #client{socket = Socket, event_callback = CallbackInfo}};
         {error, Reason} ->
-            ?LOG_EVENT(CallbackInfo, [socket, connect, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, error, {reason, Reason}]),
             {error, Reason}
     end.
 
@@ -69,7 +69,7 @@ controlling_process(Client, Pid) ->
         ok ->
             ok;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [socket, controlling_process, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [socket, controlling_process, error, {reason, Reason}]),
             {error, Reason}
     end.
 
@@ -213,7 +213,7 @@ send(Client, Data) ->
         ok ->
             ok;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [memcached_send_error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [memcached_send_error, {reason, Reason}]),
             throw({failed, {send, Reason}})
     end.
 
@@ -262,7 +262,7 @@ recv_bytes(Client, NumBytes, TimeLimit) ->
         {ok, Bin} ->
             Bin;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [memcached_receive_error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [memcached_receive_error, {reason, Reason}]),
             throw({failed, {receive_bytes, Reason}})
     end.
 

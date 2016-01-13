@@ -75,7 +75,7 @@
 
                   reconnect_wait_time :: non_neg_integer(),
                   worker_module :: atom(),
-                  callback_info :: {module(), Function :: atom()},
+                  stats_context :: {module(), Function :: atom()},
                   pool :: term()}).
 
 %%%=============================================================================
@@ -93,18 +93,18 @@ checkout(PoolName, TimeLimit) ->
     MRef = erlang:monitor(process, PoolName),
     safe_send(PoolName, {checkout, {self(), MRef}}),
     receive
-         {'DOWN', MRef, _, _, _} ->
-                {error, down};
-         {MRef, {reject, _State}} ->
-                erlang:demonitor(MRef),
-                {error, reject};
-         {MRef, Connection} ->
-                erlang:demonitor(MRef),
-                {ok, Connection}
-         after Timeout ->
-                erlang:demonitor(MRef),
-                safe_send(PoolName, {checkout_cancel, self()}),
-                {error, pool_timeout}
+        {'DOWN', MRef, _, _, _} ->
+            {error, down};
+        {MRef, {reject, _State}} ->
+            erlang:demonitor(MRef),
+            {error, reject};
+        {MRef, Connection} ->
+            erlang:demonitor(MRef),
+            {ok, Connection}
+    after Timeout ->
+            erlang:demonitor(MRef),
+            safe_send(PoolName, {checkout_cancel, self()}),
+            {error, pool_timeout}
     end.
 
 
@@ -162,10 +162,9 @@ init(Parent, ClusterName, Host, Port, PoolName, WrkModule) ->
             process_flag(trap_exit, true),
             Deb = sys:debug_options([]),
             {Module, Function} = mero_conf:stat_callback(),
-            CallBackInfo = ?CALLBACK_CONTEXT(Module, Function, ClusterName, Host, Port),
-            Initial = mero_conf:initial_connections_per_pool(),
-            spawn_connections(PoolName, WrkModule, Host, Port, CallBackInfo,
-                              Initial),
+            CallBackInfo = ?STATS_CONTEXT(Module, Function, ClusterName, Host, Port),
+            N = mero_conf:initial_connections_per_pool(),
+            [spawn_connect(PoolName, WrkModule, Host, Port, CallBackInfo) || _ <- lists:seq(1, N)],
             proc_lib:init_ack(Parent, {ok, self()}),
             State = #pool_st{
                        cluster = ClusterName,
@@ -178,11 +177,11 @@ init(Parent, ClusterName, Host, Port, PoolName, WrkModule) ->
                            mero_conf:max_connections_per_pool(),
                        busy = dict:new(),
                        num_connected = 0,
-                       num_connecting = Initial,
+                       num_connecting = N,
                        num_failed_connecting = 0,
                        reconnect_wait_time = ?RECONNECT_WAIT_TIME,
                        pool = PoolName,
-                       callback_info = CallBackInfo,
+                       stats_context = CallBackInfo,
                        worker_module = WrkModule},
             pool_loop(schedule_expiration(State), Parent, Deb)
     end.
@@ -199,12 +198,14 @@ state(PoolName) ->
             PoolPid = whereis(PoolName),
             {links, Links} = process_info(PoolPid, links),
             {monitors, Monitors} = process_info(PoolPid, monitors),
+            Free = length(State#pool_st.free),
             [
              process_info(PoolPid, message_queue_len),
              {links, length(Links)},
              {monitors, length(Monitors)},
-             {free, length(State#pool_st.free)},
+             {free, Free},
              {num_connected, State#pool_st.num_connected},
+             {num_in_use, State#pool_st.num_connected - Free},
              {num_connecting, State#pool_st.num_connecting},
              {num_failed_connecting, State#pool_st.num_failed_connecting}
             ];
@@ -238,7 +239,7 @@ pool_loop(State, Parent, Deb) ->
                                   State#pool_st.worker_module,
                                   State#pool_st.host,
                                   State#pool_st.port,
-                                  State#pool_st.callback_info),
+                                  State#pool_st.stats_context),
                     ?MODULE:pool_loop(State, Parent, Deb)
             end;
         {checkout, From} ->
@@ -283,7 +284,7 @@ maybe_spawn_connect(#pool_st{
                        num_connecting = Connecting,
                        num_failed_connecting = NumFailed,
                        worker_module = WrkModule,
-                       callback_info = CallbackInfo,
+                       stats_context = CallbackInfo,
                        reconnect_wait_time = WaitTime,
                        pool = Pool,
                        host = Host,
@@ -291,7 +292,7 @@ maybe_spawn_connect(#pool_st{
     %% Length could be big.. better to not have more than a few dozens of sockets
     %% May be worth to keep track of the length of the free in a counter.
     TotalSockets = Connected + Connecting,
-    IdleSockets  = length(Free) + Connecting,
+    IdleSockets = length(Free) + Connecting,
 
     MaxAllowed = MaxConn - TotalSockets,
     Needed = case MinConn - IdleSockets of
@@ -304,7 +305,8 @@ maybe_spawn_connect(#pool_st{
         %% Need sockets and no failed connections are reported..
         %% we create new ones
         (Needed > 0), NumFailed < 1 ->
-            spawn_connections(Pool, WrkModule, Host, Port, CallbackInfo, Needed),
+            [spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo)
+             || _Number <- lists:seq(1, Needed)],
             State#pool_st{num_connecting = Connecting + Needed};
 
         %% Wait before reconnection if more than one successive
@@ -332,7 +334,7 @@ connect_success(#pool_st{free = Free,
                        Other ->
                            Other
                    end,
-    NState = State#pool_st{free = [Conn|Free],
+    NState = State#pool_st{free = [Conn | Free],
                            num_connected = Num + 1,
                            num_connecting = NumConnecting - 1,
                            num_failed_connecting = NewNumFailed},
@@ -355,7 +357,7 @@ checkin(#pool_st{busy = Busy, free = Free} = State, Pid, Conn) ->
         {ok, {MRef, _}} ->
             erlang:demonitor(MRef),
             State#pool_st{busy = dict:erase(Pid, Busy),
-                          free = [Conn|Free]};
+                          free = [Conn | Free]};
         error ->
             State
     end.
@@ -373,11 +375,11 @@ checkin_closed_pid(#pool_st{busy = Busy, num_connected = Num} = State, Pid) ->
     end.
 
 
-down(#pool_st{busy = Busy, num_connected = Num, callback_info = CallbackInfo} = State, Pid) ->
+down(#pool_st{busy = Busy, num_connected = Num, stats_context = CallbackInfo} = State, Pid) ->
     case dict:find(Pid, Busy) of
         {ok, {_, Conn}} ->
             catch close(Conn),
-            ?LOG_EVENT(CallbackInfo, [socket, connect, close]),
+            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, close]),
             NewState = State#pool_st{busy = dict:erase(Pid, Busy),
                                      num_connected = Num - 1},
             maybe_spawn_connect(NewState);
@@ -386,62 +388,54 @@ down(#pool_st{busy = Busy, num_connected = Num, callback_info = CallbackInfo} = 
     end.
 
 
-give(#pool_st{free = [Conn|Free],
+give(#pool_st{free = [Conn | Free],
               busy = Busy} = State, {Pid, Ref}) ->
     MRef = erlang:monitor(process, Pid),
     safe_send(Pid, {Ref, Conn}),
     State#pool_st{busy = dict:store(Pid, {MRef, Conn}, Busy), free = Free}.
 
 
-spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo) ->
-    MaxConnectionDelayTime = mero_conf:max_connection_delay_time(),
-    spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo, MaxConnectionDelayTime).
-
-spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo, SleepTime) ->
-    spawn_link(fun() ->
-                       case (SleepTime > 0) of
-                           true ->
-                               %% Wait before reconnect
-                               random:seed(os:timestamp()),
-                               timer:sleep(random:uniform(SleepTime));
-                           false ->
-                               ignore
-                       end,
-                       try_connect(Pool, WrkModule, Host, Port, CallbackInfo)
-               end).
-
-
-spawn_connections(Pool, WrkModule, Host, Port, CallbackInfo, 1) ->
-    spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo);
-spawn_connections(Pool, WrkModule, Host, Port, CallbackInfo, Number) when (Number > 0) ->
-    SleepTime = mero_conf:max_connection_delay_time(),
-    [ spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo, SleepTime)
-      || _Number <- lists:seq(1, Number) ].
-
-
-try_connect(Pool, WrkModule, Host, Port, CallbackInfo) ->
-    case connect(WrkModule, Host, Port, CallbackInfo) of
-        {ok, Client} ->
-            case controlling_process(WrkModule, Client, whereis(Pool)) of
-                ok ->
-                    safe_send(Pool, {connect_success, #conn{worker_module = WrkModule,
-                                                            client = Client,
-                                                            pool = Pool,
-                                                            updated = os:timestamp()
-                                                           }});
-                {error, _Reason} ->
-                    safe_send(Pool, connect_failed)
-            end;
-        {error, _Reason} ->
-            safe_send(Pool, connect_failed)
-    end.
+spawn_connect(Pool, WrkModule, Host, Port, StatContext) ->
+    spawn_link(
+      fun() ->
+              try
+                  case connect(StatContext, WrkModule, Host, Port, StatContext) of
+                      {ok, Client} ->
+                          ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_controlling_process]),
+                          case controlling_process(StatContext, WrkModule, Client, whereis(Pool)) of
+                              ok ->
+                                  ?LOG_STAT_SPIRAL(StatContext, [connected]),
+                                  safe_send(Pool, {connect_success, #conn{worker_module = WrkModule,
+                                                                          client = Client,
+                                                                          pool = Pool,
+                                                                          updated = os:timestamp()
+                                                                         }});
+                              {error, _Reason} ->
+                                  safe_send(Pool, connect_failed)
+                          end;
+                      {error, _Reason} ->
+                          safe_send(Pool, connect_failed)
+                  end
+              catch E:R ->
+                      ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_error, {reason, exception}]),
+                      error_logger:error_report("Fatal problem connecting on mero ~p ~p ~p",
+                                                [E, R, erlang:get_stacktrace()]),
+                      safe_send(Pool, connect_failed)
+              end
+      end).
 
 
-connect(WrkModule, Host, Port, CallbackInfo) ->
-    WrkModule:connect(Host, Port, CallbackInfo).
+connect(StatContext, WrkModule, Host, Port, CallbackInfo) ->
+    ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_connect]),
+    ?LOG_STAT_HISTOGRAM(StatContext, WrkModule, connect,
+                        [Host, Port, CallbackInfo],
+                        [time_connect]).
 
-controlling_process(WrkModule, WrkState, Parent) ->
-    WrkModule:controlling_process(WrkState, Parent).
+controlling_process(StatContext, WrkModule, WrkState, Parent) ->
+    ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_controlling_process]),
+    ?LOG_STAT_HISTOGRAM(StatContext, WrkModule, controlling_process,
+                        [WrkState, Parent],
+                        [time_controlling_process]).
 
 
 conn_time_to_live(_Pool) ->
@@ -456,7 +450,10 @@ schedule_expiration(State) ->
     State.
 
 
-expire_connections(#pool_st{free = Conns, pool = Pool, num_connected = Num, callback_info = CallbackInfo} = State) ->
+expire_connections(#pool_st{free = Conns,
+    pool = Pool,
+    num_connected = Num,
+    stats_context = CallbackInfo} = State) ->
     Now = os:timestamp(),
     try conn_time_to_live(Pool) of
         TTL ->
@@ -478,7 +475,7 @@ checkout_cancel(#pool_st{busy = Busy, free = Free} = State, Pid) ->
         {ok, {MRef, Conn}} ->
             erlang:demonitor(MRef),
             State#pool_st{busy = dict:erase(Pid, Busy),
-                          free = [Conn|Free]};
+                          free = [Conn | Free]};
         error ->
             State
     end.
@@ -498,7 +495,7 @@ close_connections(_CallbackInfo, []) -> ok;
 
 close_connections(CallbackInfo, [Conn | Conns]) ->
     catch close(Conn),
-    ?LOG_EVENT(CallbackInfo, [socket, connect, close]),
+    ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, close]),
     close_connections(CallbackInfo, Conns).
 
 is_config_valid() ->

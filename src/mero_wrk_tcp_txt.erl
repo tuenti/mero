@@ -56,10 +56,10 @@
 connect(Host, Port, CallbackInfo) ->
     case gen_tcp:connect(Host, Port, ?SOCKET_OPTIONS) of
         {ok, Socket} ->
-            ?LOG_EVENT(CallbackInfo, [socket, connect, ok]),
+            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, ok]),
             {ok, #client{socket = Socket, event_callback = CallbackInfo}};
         {error, Reason} ->
-            ?LOG_EVENT(CallbackInfo, [socket, connect, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, error, {reason, Reason}]),
             {error, Reason}
     end.
 
@@ -69,7 +69,7 @@ controlling_process(Client, Pid) ->
         ok ->
             ok;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [socket, controlling_process, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [socket, controlling_process, error, {reason, Reason}]),
             {error, Reason}
     end.
 
@@ -203,7 +203,7 @@ send(Client, Data) ->
     case gen_tcp:send(Client#client.socket, Data) of
         ok -> ok;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [socket, send, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [socket, send, error, {reason, Reason}]),
            throw({failed, Reason})
     end.
 
@@ -224,11 +224,11 @@ receive_response(Client, Op, TimeLimit, AccBinary, AccResult) ->
                 {ok, NBuffer, NAccResult} ->
                     receive_response(Client, Op, TimeLimit, NBuffer, NAccResult);
                 {error, Reason} ->
-                    ?LOG_EVENT(Client#client.event_callback, [socket, rcv, error, {reason, Reason}]),
+                    ?LOG_STAT_SPIRAL(Client#client.event_callback, [socket, rcv, error, {reason, Reason}]),
                     throw({failed, Reason})
             end;
         {error, Reason} ->
-            ?LOG_EVENT(Client#client.event_callback, [socket, rcv, error, {reason, Reason}]),
+            ?LOG_STAT_SPIRAL(Client#client.event_callback, [socket, rcv, error, {reason, Reason}]),
             throw({failed, Reason})
     end.
 

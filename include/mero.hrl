@@ -45,15 +45,35 @@
 %%% Default timeout for instrospection functions
 -define(DEFAULT_TIMEOUT, 5000).
 
--define(LOG_EVENT(MF, KeyAndTags), begin
-                                  {StatModule, StatFunction, GlobalTags} = MF,
-                                  apply(StatModule, StatFunction, [KeyAndTags ++ GlobalTags])
-                                end).
+-define(LOG_STAT_SPIRAL(MF, KeyAndTags),
+    begin
+        apply(element(1, MF),
+            element(2, MF),
+            [spiral, KeyAndTags ++ element(3, MF), 1])
+    end).
 
--define(CALLBACK_CONTEXT(StatModule, StatFunction, ClusterName, Host, Port),
+
+-define(LOG_STAT_GAUGE(MF, KeyAndTags, Value),
+    begin
+        apply(element(1, MF),
+            element(2, MF),
+            [spiral, KeyAndTags ++ element(3, MF), Value])
+    end).
+
+
+-define(LOG_STAT_HISTOGRAM(MF, Module, Function, Args, KeyAndTags),
+    begin
+        {ExecTimeMicroSec, Ret} = timer:tc(Module, Function, Args),
+        apply(element(1, MF),
+            element(2, MF),
+            [histogram, KeyAndTags ++ element(3, MF), ExecTimeMicroSec]),
+        Ret
+    end).
+
+-define(STATS_CONTEXT(StatModule, StatFunction, ClusterName, Host, Port),
     {StatModule, StatFunction,
         [{cluster_name, ClusterName},
-         {host, Host},
-         {port, Port}]}).
+            {host, Host},
+            {port, Port}]}).
 
 -endif.
