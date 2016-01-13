@@ -291,16 +291,10 @@ maybe_spawn_connect(#pool_st{
                        port = Port} = State) ->
     %% Length could be big.. better to not have more than a few dozens of sockets
     %% May be worth to keep track of the length of the free in a counter.
-    TotalSockets = Connected + Connecting,
-    IdleSockets = length(Free) + Connecting,
 
-    MaxAllowed = MaxConn - TotalSockets,
-    Needed = case MinConn - IdleSockets of
-                 MaxNeeded when MaxNeeded > MaxAllowed ->
-                     MaxAllowed;
-                 MaxNeeded ->
-                     MaxNeeded
-             end,
+    FreeSockets = length(Free),
+
+    Needed = calculate_needed(FreeSockets, Connected, Connecting, MaxConn, MinConn),
     if
         %% Need sockets and no failed connections are reported..
         %% we create new ones
@@ -322,23 +316,29 @@ maybe_spawn_connect(#pool_st{
             State
     end.
 
+calculate_needed(FreeSockets, Connected, Connecting, MaxConn, MinConn) ->
+    TotalSockets = Connected + Connecting,
+    MaxAllowed = MaxConn - TotalSockets,
+    IdleSockets = FreeSockets + Connecting,
+    case MinConn - IdleSockets of
+        MaxNeeded when MaxNeeded > MaxAllowed ->
+            MaxAllowed;
+        MaxNeeded ->
+            MaxNeeded
+    end.
+
 
 connect_success(#pool_st{free = Free,
                          num_connected = Num,
                          num_connecting = NumConnecting,
                          num_failed_connecting = NumFailed} = State,
                 Conn) ->
-    NewNumFailed = case NumFailed - 1 of
-                       Neg when Neg < 0 ->
-                           0;
-                       Other ->
-                           Other
-                   end,
+    %% When we succeed the connection we assume
     NState = State#pool_st{free = [Conn | Free],
                            num_connected = Num + 1,
                            num_connecting = NumConnecting - 1,
-                           num_failed_connecting = NewNumFailed},
-    case (NewNumFailed > 0) of
+                           num_failed_connecting = 0},
+    case (NumFailed > 0) of
         true ->
             maybe_spawn_connect(NState);
         false ->
