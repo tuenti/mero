@@ -51,7 +51,9 @@
         ]).
 
 -export([state/0,
-         state/1]).
+         state/1,
+         deep_state/0,
+         deep_state/1]).
 
 -include_lib("mero/include/mero.hrl").
 
@@ -77,14 +79,14 @@ stop(_State) ->
 
 %% @doc: Gets the value of a key in a specific cluster
 -spec get(ClusterName :: atom(), Key :: binary()) ->
-    {Key :: binary(), Value :: undefined | integer()}
-    | {error, Reason :: term()}.
+                 {Key :: binary(), Value :: undefined | integer()}
+                     | {error, Reason :: term()}.
 get(ClusterName, Key) when is_binary(Key), is_atom(ClusterName) ->
     get(ClusterName, Key, mero_conf:timeout_read()).
 
 -spec get(ClusterName :: atom(), Key :: binary(), Timeout :: integer()) ->
-    {Key :: binary(), Value :: undefined | binary()}
-    | {error, Reason :: term()}.
+                 {Key :: binary(), Value :: undefined | binary()}
+                     | {error, Reason :: term()}.
 get(ClusterName, Key, Timeout) when is_binary(Key), is_atom(ClusterName) ->
     case mero_conn:get(ClusterName, [Key], Timeout) of
         [{Key, Value}] ->
@@ -101,8 +103,8 @@ get(ClusterName, Key, Timeout) when is_binary(Key), is_atom(ClusterName) ->
 %% NOTE: On error we still could have processed part of the request, so we still
 %% return all the completed responses.
 -spec mget(ClusterName :: atom(), Keys :: [binary()], Timeout :: integer()) ->
-    [{Key :: binary(), Value :: undefined | binary()}]
-    | {error, Reason :: term(), ProcessedKeyValues :: [{Key :: binary(), Value :: binary()}]}.
+                  [{Key :: binary(), Value :: undefined | binary()}]
+                      | {error, Reason :: term(), ProcessedKeyValues :: [{Key :: binary(), Value :: binary()}]}.
 mget(ClusterName, Keys) when is_list(Keys), is_atom(ClusterName) ->
     mero_conn:get(ClusterName, Keys, mero_conf:timeout_read()).
 mget(ClusterName, Keys, Timeout) when is_list(Keys), is_atom(ClusterName) ->
@@ -110,19 +112,19 @@ mget(ClusterName, Keys, Timeout) when is_list(Keys), is_atom(ClusterName) ->
 
 
 -spec add(ClusterName :: atom(), Key :: binary(), Value :: binary(), ExpTime :: integer(),
-    Timeout :: integer()) ->
-    ok | {error, Reason :: term()}.
+          Timeout :: integer()) ->
+                 ok | {error, Reason :: term()}.
 add(ClusterName, Key, Value, ExpTime, Timeout)
-    when is_binary(Key), is_atom(ClusterName), is_binary(Value), is_integer(ExpTime) ->
+  when is_binary(Key), is_atom(ClusterName), is_binary(Value), is_integer(ExpTime) ->
     BExpTime = list_to_binary(integer_to_list(ExpTime)),
     mero_conn:add(ClusterName, Key, Value, BExpTime, Timeout).
 
 %% ExpTime is in seconds.
 -spec set(ClusterName :: atom(), Key :: binary(), Value :: binary(), ExpTime :: integer(),
-    Timeout :: integer()) ->
-    ok | {error, Reason :: term()}.
+          Timeout :: integer()) ->
+                 ok | {error, Reason :: term()}.
 set(ClusterName, Key, Value, ExpTime, Timeout)
-    when is_binary(Key), is_atom(ClusterName), is_binary(Value), is_integer(ExpTime) ->
+  when is_binary(Key), is_atom(ClusterName), is_binary(Value), is_integer(ExpTime) ->
     BExpTime = list_to_binary(integer_to_list(ExpTime)),
     mero_conn:set(ClusterName, Key, Value, BExpTime, Timeout).
 
@@ -130,19 +132,19 @@ set(ClusterName, Key, Value, ExpTime, Timeout)
 %% @doc: Increments a counter: initial value is 1, steps of 1, timeout defaults to 24 hours.
 %%    3 retries.
 -spec increment_counter(ClusterName :: atom(), Key :: binary()) ->
-    ok | {error, Reason :: term()}.
+                               ok | {error, Reason :: term()}.
 increment_counter(ClusterName, Key) when is_atom(ClusterName), is_binary(Key) ->
     increment_counter(ClusterName, Key, 1, 1, mero_conf:key_expiration_time(),
                       mero_conf:write_retries(), mero_conf:timeout_write()).
 
 
 -spec increment_counter(ClusterName :: atom(), Key :: binary(), Value :: integer(),
-    Initial :: integer(), ExpTime :: integer(),
-    Retries :: integer(), Timeout :: integer()) ->
-        ok | {error, Reason :: term()}.
+                        Initial :: integer(), ExpTime :: integer(),
+                        Retries :: integer(), Timeout :: integer()) ->
+                               ok | {error, Reason :: term()}.
 increment_counter(ClusterName, Key, Value, Initial, ExpTime, Retries, Timeout)
   when is_binary(Key), is_integer(Value), is_integer(ExpTime), is_atom(ClusterName),
-    (Initial >= 0), (Value >=0) ->
+       (Initial >= 0), (Value >= 0) ->
     BValue = list_to_binary(integer_to_list(Value)),
     BInitial = list_to_binary(integer_to_list(Initial)),
     BExpTime = list_to_binary(integer_to_list(ExpTime)),
@@ -150,14 +152,14 @@ increment_counter(ClusterName, Key, Value, Initial, ExpTime, Retries, Timeout)
 
 
 -spec delete(ClusterName :: atom(), Key :: binary(), Timeout :: integer()) ->
-    ok | {error, Reason :: term()}.
+                    ok | {error, Reason :: term()}.
 delete(ClusterName, Key, Timeout) when is_binary(Key), is_atom(ClusterName) ->
     mero_conn:delete(ClusterName, Key, Timeout).
 
 
 %% The response is a list of all the individual requests, one per shard
 -spec flush_all(ClusterName :: atom()) ->
-    [ ok | {error, Response :: term()}].
+                       [ok | {error, Response :: term()}].
 flush_all(ClusterName) ->
     mero_conn:flush_all(ClusterName, ?DEFAULT_TIMEOUT).
 
@@ -183,23 +185,23 @@ shard_crc32(Key, ShardSize) ->
 state(ClusterName) ->
     {Links, Monitors, Free, Connected, Connecting, Failed, MessageQueue} =
         lists:foldr(fun
-            ({Cluster, _, _, Pool, _},
-                {ALinks, AMonitors, AFree, AConnected, AConnecting, AFailed, AMessageQueue})
-                when (Cluster == ClusterName) ->
-                begin
-                    St = mero_pool:state(Pool),
-                    {
-                        ALinks + proplists:get_value(links, St),
-                        AMonitors + proplists:get_value(monitors, St),
-                        AFree + proplists:get_value(free, St),
-                        AConnected + proplists:get_value(num_connected, St),
-                        AConnecting + proplists:get_value(num_connecting, St),
-                        AFailed + proplists:get_value(num_failed_connecting, St),
-                        AMessageQueue + proplists:get_value(message_queue_len, St)}
+                        ({Cluster, _, _, Pool, _},
+                         {ALinks, AMonitors, AFree, AConnected, AConnecting, AFailed, AMessageQueue})
+                    when (Cluster == ClusterName) ->
+                           begin
+                               St = mero_pool:state(Pool),
+                               {
+                                 ALinks + proplists:get_value(links, St),
+                                 AMonitors + proplists:get_value(monitors, St),
+                                 AFree + proplists:get_value(free, St),
+                                 AConnected + proplists:get_value(num_connected, St),
+                                 AConnecting + proplists:get_value(num_connecting, St),
+                                 AFailed + proplists:get_value(num_failed_connecting, St),
+                                 AMessageQueue + proplists:get_value(message_queue_len, St)}
 
-                end;
-            (_, Acc) -> Acc
-        end, {0,0,0,0,0,0,0}, mero_cluster:child_definitions()),
+                           end;
+                        (_, Acc) -> Acc
+                   end, {0, 0, 0, 0, 0, 0, 0}, mero_cluster:child_definitions()),
     [
      {links, Links},
      {monitors, Monitors},
@@ -210,6 +212,20 @@ state(ClusterName) ->
      {failed, Failed},
      {message_queue_len, MessageQueue}].
 
+
+deep_state(ClusterName) ->
+    lists:foldr(
+      fun
+          ({Cluster, _, _, Pool, _}, Acc) when (Cluster == ClusterName) ->
+                       St = mero_pool:state(Pool),
+                       [[{pool, Pool} | St] | Acc];
+          (_, Acc) -> Acc
+               end, [], mero_cluster:child_definitions()).
+
+
+%% @doc: Returns the state of the sockets for all clusters
+deep_state() ->
+    [{Cluster, deep_state(Cluster)} || Cluster <- mero_cluster:clusters()].
 
 %% @doc: Returns the state of the sockets for all clusters
 state() ->

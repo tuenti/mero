@@ -199,8 +199,20 @@ state(PoolName) ->
             {links, Links} = process_info(PoolPid, links),
             {monitors, Monitors} = process_info(PoolPid, monitors),
             Free = length(State#pool_st.free),
+            StatContext = State#pool_st.stats_context,
+            {message_queue_len, MessageQueueLength} = process_info(PoolPid, message_queue_len),
+
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_connected], State#pool_st.num_connected),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_connecting], State#pool_st.num_connecting),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_failed_connecting], State#pool_st.num_failed_connecting),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_in_use], State#pool_st.num_connected - Free),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_free], Free),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, links], length(Links)),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, monitors], length(Monitors)),
+            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, message_queue_len], MessageQueueLength),
+
             [
-             process_info(PoolPid, message_queue_len),
+             {message_queue_len, MessageQueueLength},
              {links, length(Links)},
              {monitors, length(Monitors)},
              {free, Free},
