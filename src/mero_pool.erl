@@ -470,7 +470,7 @@ expire_connections(#pool_st{free = Conns,
             case lists:foldl(fun filter_expired/2, {Now, TTL, [], []}, Conns) of
                 {_, _, [], _} -> State;
                 {_, _, ExpConns, ActConns} ->
-                    mero_stat:log("Expiring ~p connections", [ExpConns]),
+                    mero_stat:log("Expiring ~p connections", [length(ExpConns)]),
                     spawn_link(fun() -> close_connections(ExpConns, expired) end),
                     maybe_spawn_connect(
                       State#pool_st{free = ActConns,
