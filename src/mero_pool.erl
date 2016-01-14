@@ -164,7 +164,6 @@ init(Parent, ClusterName, Host, Port, PoolName, WrkModule) ->
             {Module, Function} = mero_conf:stat_callback(),
             CallBackInfo = ?STATS_CONTEXT(Module, Function, ClusterName, Host, Port),
             N = mero_conf:initial_connections_per_pool(),
-            mero_stat:log(CallBackInfo, "spawning initial ~p connections", [N]),
             [spawn_connect(PoolName, WrkModule, Host, Port, CallBackInfo) || _ <- lists:seq(1, N)],
             proc_lib:init_ack(Parent, {ok, self()}),
             State = #pool_st{
@@ -306,8 +305,8 @@ maybe_spawn_connect(#pool_st{
         %% Need sockets and no failed connections are reported..
         %% we create new ones
         (Needed > 0), NumFailed < 1 ->
-            mero_stat:log(CallBackInfo, "spawning needed ~p connections Free ~p Connected ~p Connecting ~p MinMax(~p ~p)",
-                [Needed, FreeSockets, Connected, Connecting, MinConn, MaxConn]),
+            %mero_stat:log(CallBackInfo, "spawning needed ~p connections Free ~p Connected ~p Connecting ~p MinMax(~p ~p)",
+            %    [Needed, FreeSockets, Connected, Connecting, MinConn, MaxConn]),
             [spawn_connect(Pool, WrkModule, Host, Port, CallBackInfo)
              || _Number <- lists:seq(1, Needed)],
             State#pool_st{num_connecting = Connecting + Needed};
@@ -353,7 +352,7 @@ connect_success(#pool_st{free = Free,
             mero_stat:log(State#pool_st.stats_context, "Yuhu new socket and now we have ~p!. we were failing so lets create more", [Num+1]),
             maybe_spawn_connect(NState);
         false ->
-            mero_stat:log(State#pool_st.stats_context, "Yuhu new socket and now we have ~p!", [Num+1]),
+            %mero_stat:log(State#pool_st.stats_context, "Yuhu new socket and now we have ~p!", [Num+1]),
             NState
     end.
 
