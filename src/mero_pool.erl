@@ -227,10 +227,8 @@ state(PoolName) ->
 pool_loop(State, Parent, Deb) ->
     receive
         {connect_success, Conn} ->
-            mero_stat:log("Yuhu new socket !", []),
             ?MODULE:pool_loop(connect_success(State, Conn), Parent, Deb);
         connect_failed ->
-            mero_stat:log("Failed to create socket :(", []),
             ?MODULE:pool_loop(connect_failed(State), Parent, Deb);
         connect ->
             NumConnecting = State#pool_st.num_connecting,
@@ -269,7 +267,7 @@ pool_loop(State, Parent, Deb) ->
             exit(Reason);
         %% Assume exit signal from connecting process
         {'EXIT', _, Reason} when Reason /= normal ->
-            mero_stat:log("failed to connect and die !", []),
+            mero_stat:log(State#pool_st.stats_context, "failed to connect and die !", []),
             ?MODULE:pool_loop(connect_failed(State), Parent, Deb);
         {system, From, Msg} ->
             sys:handle_system_msg(Msg, From, Parent, ?MODULE, Deb, State);
@@ -308,8 +306,8 @@ maybe_spawn_connect(#pool_st{
         %% Need sockets and no failed connections are reported..
         %% we create new ones
         (Needed > 0), NumFailed < 1 ->
-            mero_stat:log(CallBackInfo, "spawning needed ~p connections ~p", [Needed,
-                                                                {FreeSockets, Connected, Connecting, MaxConn, MinConn}]),
+            mero_stat:log(CallBackInfo, "spawning needed ~p connections Free ~p Connected ~p Connecting ~p MinMax(~p ~p)",
+                [Needed, FreeSockets, Connected, Connecting, MinConn, MaxConn]),
             [spawn_connect(Pool, WrkModule, Host, Port, CallBackInfo)
              || _Number <- lists:seq(1, Needed)],
             State#pool_st{num_connecting = Connecting + Needed};
@@ -352,14 +350,17 @@ connect_success(#pool_st{free = Free,
                            num_failed_connecting = 0},
     case (NumFailed > 0) of
         true ->
+            mero_stat:log(State#pool_st.stats_context, "Yuhu new socket and now we have ~p!. we were failing so lets create more", [Num+1]),
             maybe_spawn_connect(NState);
         false ->
+            mero_stat:log(State#pool_st.stats_context, "Yuhu new socket and now we have ~p!", [Num+1]),
             NState
     end.
 
 
 connect_failed(#pool_st{num_connecting = Num,
                         num_failed_connecting = NumFailed} = State) ->
+    mero_stat:log(State#pool_st.stats_context, "Failed ~p times to create socket. We only have ~p socket :(", [NumFailed +1,Num-1]),
     maybe_spawn_connect(State#pool_st{num_connecting = Num - 1,
                                       num_failed_connecting = NumFailed + 1}).
 
@@ -429,7 +430,7 @@ spawn_connect(Pool, WrkModule, Host, Port, StatContext) ->
                   end
               catch E:R ->
                       ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_error, {reason, exception}]),
-                      mero_stat:log("Fatal problem connecting on mero ~p ~p ~p",
+                      mero_stat:log(StatContext, "Fatal problem connecting on mero ~p ~p ~p",
                                                 [E, R, erlang:get_stacktrace()]),
                       safe_send(Pool, connect_failed)
               end
@@ -470,7 +471,8 @@ expire_connections(#pool_st{free = Conns,
             case lists:foldl(fun filter_expired/2, {Now, TTL, [], []}, Conns) of
                 {_, _, [], _} -> State;
                 {_, _, ExpConns, ActConns} ->
-                    mero_stat:log("Expiring ~p connections", [length(ExpConns)]),
+                    mero_stat:log(State#pool_st.stats_context,
+                        "Expiring ~p connections", [length(ExpConns)]),
                     spawn_link(fun() -> close_connections(ExpConns, expired) end),
                     maybe_spawn_connect(
                       State#pool_st{free = ActConns,
