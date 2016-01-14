@@ -4,7 +4,9 @@
 
 -export([
     noop/3,
-    verbose_noop/3
+    verbose_noop/3,
+    log/2,
+    log/3
 ]).
 
 %%%===================================================================
@@ -20,3 +22,12 @@ noop(_Type, _KeyAndTags, _Value) ->
     no_return().
 verbose_noop(Type, KeyAndTags, Value) ->
     error_logger:info_report({stat, Type, KeyAndTags, Value}).
+
+
+log(Msg, Args) ->
+    log({undefined, undefined, []}, Msg, Args).
+log({_,_ ,Context}, Msg, Args) ->
+    ClusterName = proplists:get_value(cluster_name, Context),
+    Host = proplists:get_value(host, Context),
+    error_logger:error_msg("Mero [~p] [~p] " ++ Msg,
+        [ClusterName, Host] ++ Args).

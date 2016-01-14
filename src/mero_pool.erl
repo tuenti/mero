@@ -35,7 +35,7 @@
          checkin/1,
          checkin_closed/1,
          transaction/3,
-         close/1,
+         close/2,
          pool_loop/3,
          system_continue/3,
          system_terminate/4]).
@@ -137,8 +137,8 @@ transaction(#conn{worker_module = WorkerModule,
 
 
 close(#conn{worker_module = WorkerModule,
-            client = Client}) ->
-    WorkerModule:close(Client).
+            client = Client}, Reason) ->
+    WorkerModule:close(Client, Reason).
 
 
 system_continue(Parent, Deb, State) ->
@@ -164,6 +164,7 @@ init(Parent, ClusterName, Host, Port, PoolName, WrkModule) ->
             {Module, Function} = mero_conf:stat_callback(),
             CallBackInfo = ?STATS_CONTEXT(Module, Function, ClusterName, Host, Port),
             N = mero_conf:initial_connections_per_pool(),
+            mero_stat:log(CallBackInfo, "spawning initial ~p connections", [N]),
             [spawn_connect(PoolName, WrkModule, Host, Port, CallBackInfo) || _ <- lists:seq(1, N)],
             proc_lib:init_ack(Parent, {ok, self()}),
             State = #pool_st{
@@ -199,17 +200,7 @@ state(PoolName) ->
             {links, Links} = process_info(PoolPid, links),
             {monitors, Monitors} = process_info(PoolPid, monitors),
             Free = length(State#pool_st.free),
-            StatContext = State#pool_st.stats_context,
             {message_queue_len, MessageQueueLength} = process_info(PoolPid, message_queue_len),
-
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_connected], State#pool_st.num_connected),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_connecting], State#pool_st.num_connecting),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_failed_connecting], State#pool_st.num_failed_connecting),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_in_use], State#pool_st.num_connected - Free),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, sockets_free], Free),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, links], length(Links)),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, monitors], length(Monitors)),
-            ?LOG_STAT_GAUGE(StatContext, [mero_pool, state, message_queue_len], MessageQueueLength),
 
             [
              {message_queue_len, MessageQueueLength},
@@ -236,8 +227,10 @@ state(PoolName) ->
 pool_loop(State, Parent, Deb) ->
     receive
         {connect_success, Conn} ->
+            mero_stat:log("Yuhu new socket !", []),
             ?MODULE:pool_loop(connect_success(State, Conn), Parent, Deb);
         connect_failed ->
+            mero_stat:log("Failed to create socket :(", []),
             ?MODULE:pool_loop(connect_failed(State), Parent, Deb);
         connect ->
             NumConnecting = State#pool_st.num_connecting,
@@ -245,8 +238,11 @@ pool_loop(State, Parent, Deb) ->
             MaxConns = State#pool_st.max_connections,
             case (NumConnecting + Connected) > MaxConns of
                 true ->
+                    mero_stat:log(State#pool_st.stats_context, "Was connect time! but we ignored it ~p",
+                                  [{NumConnecting, Connected, MaxConns}]),
                     ?MODULE:pool_loop(State#pool_st{num_connecting = NumConnecting - 1}, Parent, Deb);
                 false ->
+                    mero_stat:log(State#pool_st.stats_context, "Connect time! one ms", []),
                     spawn_connect(State#pool_st.pool,
                                   State#pool_st.worker_module,
                                   State#pool_st.host,
@@ -273,6 +269,7 @@ pool_loop(State, Parent, Deb) ->
             exit(Reason);
         %% Assume exit signal from connecting process
         {'EXIT', _, Reason} when Reason /= normal ->
+            mero_stat:log("failed to connect and die !", []),
             ?MODULE:pool_loop(connect_failed(State), Parent, Deb);
         {system, From, Msg} ->
             sys:handle_system_msg(Msg, From, Parent, ?MODULE, Deb, State);
@@ -296,7 +293,7 @@ maybe_spawn_connect(#pool_st{
                        num_connecting = Connecting,
                        num_failed_connecting = NumFailed,
                        worker_module = WrkModule,
-                       stats_context = CallbackInfo,
+                       stats_context = CallBackInfo,
                        reconnect_wait_time = WaitTime,
                        pool = Pool,
                        host = Host,
@@ -311,7 +308,9 @@ maybe_spawn_connect(#pool_st{
         %% Need sockets and no failed connections are reported..
         %% we create new ones
         (Needed > 0), NumFailed < 1 ->
-            [spawn_connect(Pool, WrkModule, Host, Port, CallbackInfo)
+            mero_stat:log(CallBackInfo, "spawning needed ~p connections ~p", [Needed,
+                                                                {FreeSockets, Connected, Connecting, MaxConn, MinConn}]),
+            [spawn_connect(Pool, WrkModule, Host, Port, CallBackInfo)
              || _Number <- lists:seq(1, Needed)],
             State#pool_st{num_connecting = Connecting + Needed};
 
@@ -319,6 +318,7 @@ maybe_spawn_connect(#pool_st{
         %% connection attempt has failed. Don't open more than
         %% one connection until an attempt has succeeded again.
         (Needed > 0), Connecting == 0 ->
+            mero_stat:log(CallBackInfo, "Wait before reconnection ~p connections ~p ms", [Needed, WaitTime]),
             erlang:send_after(WaitTime, self(), connect),
             State#pool_st{num_connecting = Connecting + 1};
 
@@ -387,11 +387,10 @@ checkin_closed_pid(#pool_st{busy = Busy, num_connected = Num} = State, Pid) ->
     end.
 
 
-down(#pool_st{busy = Busy, num_connected = Num, stats_context = CallbackInfo} = State, Pid) ->
+down(#pool_st{busy = Busy, num_connected = Num} = State, Pid) ->
     case dict:find(Pid, Busy) of
         {ok, {_, Conn}} ->
-            catch close(Conn),
-            ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, close]),
+            close_connection(Conn, down),
             NewState = State#pool_st{busy = dict:erase(Pid, Busy),
                                      num_connected = Num - 1},
             maybe_spawn_connect(NewState);
@@ -430,7 +429,7 @@ spawn_connect(Pool, WrkModule, Host, Port, StatContext) ->
                   end
               catch E:R ->
                       ?LOG_STAT_SPIRAL(StatContext, [spawn_connect_error, {reason, exception}]),
-                      error_logger:error_report("Fatal problem connecting on mero ~p ~p ~p",
+                      mero_stat:log("Fatal problem connecting on mero ~p ~p ~p",
                                                 [E, R, erlang:get_stacktrace()]),
                       safe_send(Pool, connect_failed)
               end
@@ -463,16 +462,16 @@ schedule_expiration(State) ->
 
 
 expire_connections(#pool_st{free = Conns,
-    pool = Pool,
-    num_connected = Num,
-    stats_context = CallbackInfo} = State) ->
+                            pool = Pool,
+                            num_connected = Num} = State) ->
     Now = os:timestamp(),
     try conn_time_to_live(Pool) of
         TTL ->
             case lists:foldl(fun filter_expired/2, {Now, TTL, [], []}, Conns) of
                 {_, _, [], _} -> State;
                 {_, _, ExpConns, ActConns} ->
-                    spawn_link(fun() -> close_connections(CallbackInfo, ExpConns) end),
+                    mero_stat:log("Expiring ~p connections", [ExpConns]),
+                    spawn_link(fun() -> close_connections(ExpConns, expired) end),
                     maybe_spawn_connect(
                       State#pool_st{free = ActConns,
                                     num_connected = Num - length(ExpConns)})
@@ -503,12 +502,14 @@ filter_expired(#conn{updated = Updated} = Conn, {Now, TTL, ExpConns, ActConns}) 
 safe_send(PoolName, Cmd) ->
     catch PoolName ! Cmd.
 
-close_connections(_CallbackInfo, []) -> ok;
+close_connections([], _Reason) -> ok;
 
-close_connections(CallbackInfo, [Conn | Conns]) ->
-    catch close(Conn),
-    ?LOG_STAT_SPIRAL(CallbackInfo, [socket, connect, close]),
-    close_connections(CallbackInfo, Conns).
+close_connections([Conn | Conns], Reason) ->
+    close_connection(Conn, Reason),
+    close_connections(Conns, Reason).
+
+close_connection(Conn, Reason) ->
+    catch close(Conn, Reason).
 
 is_config_valid() ->
     Initial = mero_conf:initial_connections_per_pool(),
